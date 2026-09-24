@@ -1,0 +1,27 @@
+[
+  {
+    "customer_id": "cliente_ativo",
+    "orders": [
+      {"date": "2026-03-10", "value": 300},
+      {"date": "2026-04-15", "value": 350},
+      {"date": "2026-05-20", "value": 400},
+      {"date": "2026-06-25", "value": 420},
+      {"date": "2026-07-30", "value": 450}
+    ]
+  },
+  {
+    "customer_id": "cliente_em_risco",
+    "orders": [
+      {"date": "2026-01-05", "value": 500},
+      {"date": "2026-02-10", "value": 350},
+      {"date": "2026-03-20", "value": 200},
+      {"date": "2026-04-01", "value": 100}
+    ]
+  },
+  {
+    "customer_id": "cliente_novo",
+    "orders": [
+      {"date": "2026-09-15", "value": 150}
+    ]
+  }
+]
