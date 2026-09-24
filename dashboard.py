@@ -38,6 +38,12 @@ ACTION_LABELS = {
     "monitor": "Só monitorar",
 }
 
+RISK_LABELS = {
+    "low": "Baixo",
+    "medium": "Médio",
+    "high": "Alto",
+}
+
 CONFIDENCE_LABELS = {
     "low": "Baixa — 1 ou 2 compras. Dá para ver pouco.",
     "medium": "Média — 3 ou 4 compras. A tendência já aparece.",
@@ -45,9 +51,9 @@ CONFIDENCE_LABELS = {
 }
 
 VALUE_LABELS = {
-    "high": "Alto (R$ 3.000 ou mais)",
-    "medium": "Médio (de R$ 800 a R$ 3.000)",
-    "low": "Baixo (menos de R$ 800)",
+    "high": "Alto nesta base",
+    "medium": "Médio nesta base",
+    "low": "Baixo nesta base",
 }
 
 MAX_IMPORT_ROWS = 20000
@@ -65,6 +71,30 @@ SAMPLE_HINTS = {
 def load_samples() -> list:
     with SAMPLES_PATH.open(encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def risk_label(data: dict) -> str:
+    """Faixa de risco. O score não é probabilidade calibrada, então não vira porcentagem."""
+    level = data.get("risk_level")
+    if level is None:
+        # API antiga, sem risk_level: mesmos cortes do predictor.
+        score = float(data["churn_risk"])
+        level = "high" if score >= 0.65 else "medium" if score >= 0.35 else "low"
+    return RISK_LABELS.get(level, level)
+
+
+def value_label(data: dict) -> str:
+    """Faixa de valor com os cortes da base que treinou o artefato."""
+    level = data.get("customer_value", "")
+    high = data.get("value_high_from")
+    medium = data.get("value_medium_from")
+    if level == "high" and isinstance(high, (int, float)):
+        return f"Alto ({money(high)} ou mais)"
+    if level == "medium" and isinstance(medium, (int, float)) and isinstance(high, (int, float)):
+        return f"Médio (de {money(medium)} a {money(high)})"
+    if level == "low" and isinstance(medium, (int, float)):
+        return f"Baixo (menos de {money(medium)})"
+    return VALUE_LABELS.get(level, level)
 
 
 def money(value: float) -> str:
@@ -290,11 +320,20 @@ def summary(data: dict, orders: list) -> str:
     return (
         f"A conta usou {purchase_count(len(orders))}, de {period}, somando {money(total)}. "
         f"O valor está {trend}. "
-        f"O sinal de abandono é {data['churn_risk']:.0%}. "
+        f"O sinal de abandono é {risk_label(data).lower()}. "
         f"O grupo mais parecido é {segment}. "
         f"Sugestão: {action}. "
         f"O nome “{data['customer_id']}” só identifica a resposta — ele não muda o cálculo."
     )
+
+
+def validation_message(response) -> str:
+    """Primeira mensagem de um 422 do FastAPI, sem o prefixo 'Value error, '."""
+    try:
+        message = response.json()["detail"][0]["msg"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return "confira as datas e os valores."
+    return message.removeprefix("Value error, ")
 
 
 def analyze(customer_id: str, orders: list) -> None:
@@ -319,6 +358,8 @@ def analyze(customer_id: str, orders: list) -> None:
         status = error.response.status_code
         if status == 403:
             message = "A API recusou a chave. Suba a API com $env:API_KEY = \"teste123\" e use a mesma chave neste terminal do dashboard."
+        elif status == 422:
+            message = "A API recusou os dados: " + validation_message(error.response)
         else:
             message = f"A API recusou o pedido ({status})."
         st.session_state.result = {"error": message}
@@ -344,13 +385,12 @@ def render_result() -> None:
         st.caption("“Novo” aqui quer dizer histórico curto para o agrupamento. Não quer dizer que o cadastro acabou de ser criado.")
 
     risk, segment, trend = st.columns(3)
-    risk.metric("Sinal de abandono", f"{data['churn_risk']:.0%}")
+    risk.metric("Sinal de abandono", risk_label(data))
     segment.metric("Grupo", SEGMENT_LABELS.get(data["segment"], data["segment"]))
     trend.metric("Valor das compras", TREND_LABELS.get(data["purchase_trend"], data["purchase_trend"]))
 
-    st.progress(min(max(float(data["churn_risk"]), 0.0), 1.0))
     st.markdown(f"**O que fazer:** {ACTION_LABELS.get(data['recommended_action'], data['recommended_action'])}")
-    st.markdown(f"**Valor somado:** {VALUE_LABELS.get(data['customer_value'], data['customer_value'])}")
+    st.markdown(f"**Valor somado:** {value_label(data)}")
     st.markdown(f"**Confiança:** {CONFIDENCE_LABELS.get(data.get('confidence', ''), data.get('confidence', ''))}")
 
     st.markdown("**Por que essa leitura**")

@@ -73,14 +73,22 @@ POST /analyze
 | reactivation | reactivation |
 | growth_opportunity | expansion |
 
+A ação vem do segmento, mas o risco do modelo tem prioridade quando discordam: `risk_level` alto com 2+ compras → `retention`; `at_risk` com risco baixo → `monitor`.
+
+## Contrato da API — mudanças
+
+- `risk_level` (`low` < 0.35 ≤ `medium` < 0.65 ≤ `high`) foi adicionado à resposta. É o que deve ser mostrado a pessoas; `churn_risk` continua para ordenar clientes, mas não é probabilidade calibrada e não deve aparecer como %.
+- Entradas recusadas com 422: valor negativo (devolução/estorno), data mais de 1 dia no futuro, mais de 5000 pedidos por cliente.
+- `/batch` recusa com 400 mais de 100.000 pedidos somados por chamada.
+
 ## Estado atual do modelo
 
-- **Churn (RandomForest): treinado com dados reais** do Online Retail II (UCI, loja do Reino Unido, 2009–2011, valores em GBP, muitos atacadistas) — `app/ml/online_retail.py`
-  - Rótulo por data de corte: features só com pedidos antes do corte; churn = não comprou nos 90 dias seguintes
-  - Avaliação temporal (treino em cortes 2010-06 a 2011-06, teste em 2011-09): acurácia 72,2% vs. baseline 57,3%, ROC AUC 0,786
-  - Validado nesse dataset, não em clientes do produto — o score não é probabilidade calibrada para outros negócios
-- **Segmentação (K-Means): ainda treinada com dados sintéticos** (`python -m app.ml.train --synthetic`). Com os dados reais os clusters ficam muito desbalanceados (valores de atacado dominam)
-- Separação clara: feature engineering → model → business rules → recommendation
+O motor treina numa base de pedidos (`python -m app.ml.train --orders arquivo.csv`): mesmas features para o RandomForest e para o K-Means, limiares de valor e tendência medidos nessa base, último corte só para teste. O artefato só é gravado se a medição passar (AUC, ganho sobre o baseline, tamanho dos segmentos). O score não é probabilidade calibrada.
+
+O arquivo `model.joblib` que está no repositório ainda é o treino do Online Retail II (benchmark, Reino Unido, 2009–2011, GBP). Ele deixa de ser o modelo quando uma base passar na medição. O Online Retail II continua disponível com `--benchmark`.
+
+- Rótulo de churn: features só com pedidos antes do corte; churn = não comprou nos 90 dias seguintes
+- No benchmark, a avaliação temporal antiga (teste em 2011-09) deu acurácia 72,2% vs. baseline 57,3%, ROC AUC 0,786 — isso mede aquele dataset, não clientes do produto
 
 ## Regras de desenvolvimento
 
@@ -102,10 +110,13 @@ POST /analyze
 ## Rodar localmente
 
 ```bash
-# Treinar modelo de churn com Online Retail II (baixa o dataset para data/raw/ na 1ª vez)
-python -m app.ml.train
+# Treinar churn, segmentos e limiares num CSV da base (customer_id, date, value)
+python -m app.ml.train --orders pedidos.csv
 
-# Treinar churn + segmentador com dados sintéticos
+# Benchmark: Online Retail II (não substitui o modelo se a medição falhar)
+python -m app.ml.train --benchmark
+
+# Dados sintéticos, sem corte temporal
 python -m app.ml.train --synthetic
 
 # API

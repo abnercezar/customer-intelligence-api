@@ -35,19 +35,24 @@ Sempre que o `requirements.txt` mudar, rode o `pip install` de novo.
 
 ## 3. Treinar os modelos (opcional)
 
-Os modelos treinados já estão no projeto (`app/ml/*.joblib`). Só retreine se mudar algo no ML.
+Os modelos já gravados continuam valendo até um treino passar na medição. O comando sem argumento não treina nada.
+
+O CSV precisa das colunas `customer_id`, `date` e `value` (ou `cliente`, `data` e `valor`), uma linha por pedido, datas em `YYYY-MM-DD`, valores positivos. O histórico tem que cobrir bem mais que 90 dias.
 
 ```powershell
-# Modelo de churn com dados reais (Online Retail II)
-# Na 1ª vez baixa o dataset (~45 MB) para data/raw/ e demora alguns minutos
-.\.venv\Scripts\python.exe -m app.ml.train
+# Treina churn, segmentos e limiares nesta base.
+# Só substitui os .joblib se o corte de teste ganhar do baseline.
+.\.venv\Scripts\python.exe -m app.ml.train --orders data\pedidos.csv
 
-# Modelo de churn + segmentador com dados sintéticos
+# Online Retail II entra só como benchmark (não é o modelo do produto).
+# Na 1ª vez baixa o dataset (~45 MB) para data/raw/ e demora alguns minutos.
+.\.venv\Scripts\python.exe -m app.ml.train --benchmark
+
+# Dados sintéticos: sobrescreve o artefato sem corte temporal. Não é evidência.
 .\.venv\Scripts\python.exe -m app.ml.train --synthetic
 ```
 
-> Atenção: `--synthetic` também sobrescreve o modelo de churn com a versão sintética.
-> Para voltar ao modelo real, rode depois `.\.venv\Scripts\python.exe -m app.ml.train`.
+Se a medição não passar, o comando termina com erro e **não** troca os arquivos. Reinicie a API depois de um treino que grave o artefato.
 
 ---
 

@@ -1,7 +1,10 @@
 import os
+from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
 from app.main import app, MAX_BATCH_SIZE
+from app.models.predictor import _action, _risk_level
+from app.models.schemas import MAX_ORDERS_PER_CUSTOMER
 
 API_KEY = "test-key"
 os.environ["API_KEY"] = API_KEY
@@ -189,3 +192,81 @@ def test_customer_within_expected_interval_no_overdue_reason():
     reasons_text = " ".join(data["reasons"])
     # 60 dias de recência com intervalo habitual de 90 dias — não deve alarmar.
     assert "acima do esperado" not in reasons_text
+
+
+# --- Validação de entrada ---
+
+def _error_text(response) -> str:
+    return " ".join(item["msg"] for item in response.json()["detail"])
+
+
+def test_negative_value_returns_422():
+    payload = {"customer_id": "devolucao", "orders": [{"date": "2026-03-01", "value": -50}]}
+    response = client.post("/analyze", json=payload)
+    assert response.status_code == 422
+    assert "Valor negativo" in _error_text(response)
+
+
+def test_zero_value_is_accepted():
+    payload = {"customer_id": "brinde", "orders": [{"date": "2026-03-01", "value": 0}]}
+    assert client.post("/analyze", json=payload).status_code == 200
+
+
+def test_future_date_returns_422():
+    future = (date.today() + timedelta(days=30)).isoformat()
+    payload = {"customer_id": "futuro", "orders": [{"date": future, "value": 100}]}
+    response = client.post("/analyze", json=payload)
+    assert response.status_code == 422
+    assert "futuro" in _error_text(response)
+
+
+def test_tomorrow_is_accepted_for_timezone_slack():
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    payload = {"customer_id": "fuso", "orders": [{"date": tomorrow, "value": 100}]}
+    assert client.post("/analyze", json=payload).status_code == 200
+
+
+def test_too_many_orders_for_one_customer_returns_422():
+    orders = [{"date": "2026-01-01", "value": 10}] * (MAX_ORDERS_PER_CUSTOMER + 1)
+    response = client.post("/analyze", json={"customer_id": "gigante", "orders": orders})
+    assert response.status_code == 422
+
+
+def test_batch_total_orders_over_limit_returns_400(monkeypatch):
+    monkeypatch.setattr("app.main.MAX_BATCH_ORDERS", 5)
+    response = client.post("/batch", json=[SAMPLE_PAYLOAD, SAMPLE_PAYLOAD])  # 8 pedidos
+    assert response.status_code == 400
+
+
+# --- Faixa de risco e ação ---
+
+def test_risk_level_matches_churn_score():
+    data = client.post("/analyze", json=SAMPLE_PAYLOAD).json()
+    assert data["risk_level"] == _risk_level(data["churn_risk"])
+
+
+def test_risk_level_cuts():
+    assert _risk_level(0.0) == "low"
+    assert _risk_level(0.34) == "low"
+    assert _risk_level(0.35) == "medium"
+    assert _risk_level(0.64) == "medium"
+    assert _risk_level(0.65) == "high"
+
+
+def test_high_risk_established_customer_gets_retention_even_if_clustered_as_new():
+    # Caso real visto na API: 4 compras, 176 dias sumido, K-Means dizia "new" → onboarding.
+    assert _action("new", "high", frequency=4) == "retention"
+
+
+def test_high_risk_single_order_customer_keeps_segment_action():
+    # Com 1 compra não há relação estabelecida para "reter".
+    assert _action("new", "high", frequency=1) == "onboarding"
+
+
+def test_low_risk_does_not_trigger_retention_for_at_risk_cluster():
+    assert _action("at_risk", "low", frequency=5) == "monitor"
+
+
+def test_segment_action_is_kept_when_risk_agrees():
+    assert _action("champion", "low", frequency=8) == "maintain_engagement"
+    assert _action("at_risk", "high", frequency=5) == "retention"

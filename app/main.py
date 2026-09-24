@@ -6,6 +6,7 @@ from app.models.predictor import predict
 from app.security import require_api_key
 
 MAX_BATCH_SIZE = 500
+MAX_BATCH_ORDERS = 100_000
 
 app = FastAPI(
     title="Customer Intelligence API",
@@ -45,6 +46,8 @@ def batch(requests: List[CustomerRequest]):
         raise HTTPException(status_code=400, detail="Envie pelo menos 1 cliente.")
     if len(requests) > MAX_BATCH_SIZE:
         raise HTTPException(status_code=400, detail=f"Máximo de {MAX_BATCH_SIZE} clientes por chamada.")
+    if sum(len(request.orders) for request in requests) > MAX_BATCH_ORDERS:
+        raise HTTPException(status_code=400, detail=f"Máximo de {MAX_BATCH_ORDERS} pedidos somados por chamada.")
 
     results = []
     for request in requests:

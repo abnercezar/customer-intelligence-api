@@ -6,8 +6,7 @@ from sklearn.cluster import KMeans
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-SEGMENTER_PATH = os.path.join(os.path.dirname(__file__), "segmenter.joblib")
-SEGMENT_MAP_PATH = os.path.join(os.path.dirname(__file__), "segment_map.joblib")
+from app.ml.paths import ARTIFACT_DIR, SEGMENT_MAP_PATH, SEGMENTER_PATH
 
 # Apenas features RFM — não usamos trend/intervalo para clustering
 CLUSTER_FEATURES = ["recency", "frequency", "monetary_avg", "monetary_total"]
@@ -53,7 +52,8 @@ def _label_clusters(pipeline: Pipeline) -> dict:
     return segment_map
 
 
-def train_segmenter(df: pd.DataFrame) -> dict:
+def fit_segmenter(df: pd.DataFrame):
+    """Agrupa um retrato por cliente. Não grava arquivo."""
     X = df[CLUSTER_FEATURES]
 
     pipeline = Pipeline([
@@ -63,15 +63,21 @@ def train_segmenter(df: pd.DataFrame) -> dict:
     pipeline.fit(X)
 
     segment_map = _label_clusters(pipeline)
-
-    joblib.dump(pipeline, SEGMENTER_PATH)
-    joblib.dump(segment_map, SEGMENT_MAP_PATH)
-
-    # Log para conferir a distribuição durante o treino
     labels = [segment_map[c] for c in pipeline.named_steps["kmeans"].labels_]
-    dist = pd.Series(labels).value_counts().to_dict()
-    print(f"Distribuição dos segmentos: {dist}")
+    sizes = {str(name): int(count) for name, count in pd.Series(labels).value_counts().items()}
+    return pipeline, segment_map, sizes
 
+
+def save_segmenter(pipeline: Pipeline, segment_map: dict, directory: str = None) -> None:
+    directory = directory or ARTIFACT_DIR
+    joblib.dump(pipeline, os.path.join(directory, "segmenter.joblib"))
+    joblib.dump(segment_map, os.path.join(directory, "segment_map.joblib"))
+
+
+def train_segmenter(df: pd.DataFrame) -> dict:
+    pipeline, segment_map, sizes = fit_segmenter(df)
+    save_segmenter(pipeline, segment_map)
+    print(f"Distribuição dos segmentos: {sizes}")
     return segment_map
 
 

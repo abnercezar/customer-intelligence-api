@@ -12,10 +12,52 @@ from dashboard import (
     money,
     orders_from_frame,
     read_orders_upload,
+    risk_label,
     summary,
+    validation_message,
+    value_label,
 )
 
 DASHBOARD = Path(__file__).resolve().parents[1] / "dashboard.py"
+
+
+def test_value_label_uses_the_cuts_from_the_trained_base():
+    assert value_label({
+        "customer_value": "medium",
+        "value_medium_from": 800,
+        "value_high_from": 3000,
+    }) == f"Médio (de {money(800)} a {money(3000)})"
+
+
+def test_value_label_without_cuts_does_not_invent_amounts():
+    assert value_label({"customer_value": "high"}) == "Alto nesta base"
+
+
+def test_risk_label_uses_api_level():
+    assert risk_label({"churn_risk": 0.2, "risk_level": "high"}) == "Alto"
+
+
+def test_risk_label_falls_back_to_score_for_old_api():
+    assert risk_label({"churn_risk": 0.2}) == "Baixo"
+    assert risk_label({"churn_risk": 0.5}) == "Médio"
+    assert risk_label({"churn_risk": 0.8}) == "Alto"
+
+
+class _Response:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def test_validation_message_shows_the_api_reason():
+    response = _Response({"detail": [{"msg": "Value error, Valor negativo: -10.0. Devoluções não são compras."}]})
+    assert validation_message(response) == "Valor negativo: -10.0. Devoluções não são compras."
+
+
+def test_validation_message_without_detail_has_a_generic_hint():
+    assert validation_message(_Response({})) == "confira as datas e os valores."
 
 
 def test_summary_explains_that_the_name_is_only_a_label():
@@ -38,7 +80,9 @@ def test_summary_explains_that_the_name_is_only_a_label():
     assert "2026-06-26 a 2026-08-25" in text
     assert money(1050) in text
     assert "caindo" in text
-    assert "37%" in text
+    # O score não é probabilidade calibrada: aparece como faixa, nunca como porcentagem.
+    assert "sinal de abandono é médio" in text
+    assert "37%" not in text
     assert "Novo" in text
     assert "Acolher o cliente novo" in text
     assert "não muda o cálculo" in text

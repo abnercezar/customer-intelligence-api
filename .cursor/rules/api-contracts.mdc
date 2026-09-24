@@ -19,7 +19,10 @@ alwaysApply: false
   "purchase_trend": "growing|stable|declining",
   "customer_value": "high|medium|low",
   "recommended_action": "string",
-  "reasons": ["string"]
+  "reasons": ["string"],
+  "confidence": "low|medium|high",
+  "value_high_from": "number opcional — corte de valor alto da base treinada",
+  "value_medium_from": "number opcional — corte de valor médio da base treinada"
 }
 ```
 

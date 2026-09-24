@@ -1,17 +1,31 @@
+"""
+Treina o motor numa base de pedidos.
+
+  python -m app.ml.train --orders pedidos.csv
+  python -m app.ml.train --benchmark          # Online Retail II, só comparação
+  python -m app.ml.train --synthetic          # fórmula artificial, sem corte temporal
+
+O modelo final usa só os cortes de treino. O último corte mede e não entra no fit.
+Os dois modelos e os limiares só substituem o artefato se a medição passar.
+"""
+import argparse
 import os
 import sys
+
+import joblib
 import numpy as np
 import pandas as pd
-import joblib
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from app.ml.features import FEATURES
-from app.ml.segmenter import train_segmenter
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.joblib")
+from app.ml.features import FEATURES
+from app.ml.gates import acceptance_failures
+from app.ml.orders import HORIZON_DAYS, build_training_set, choose_cutoffs, derive_thresholds, load_orders_csv
+from app.ml.paths import ARTIFACT_DIR, MODEL_PATH, THRESHOLDS_PATH
+from app.ml.segmenter import N_CLUSTERS, fit_segmenter, save_segmenter, train_segmenter
 
 
 def generate_synthetic_data(n: int = 2000) -> pd.DataFrame:
@@ -63,7 +77,11 @@ def save(model: Pipeline, df: pd.DataFrame):
 
     print("\nTreinando segmentador K-Means...")
     train_segmenter(df)
-    print("Segmentador salvo.")
+    thresholds = derive_thresholds(df)
+    thresholds["source"] = "synthetic"
+    joblib.dump(thresholds, THRESHOLDS_PATH)
+    print(f"Limiares salvos em {THRESHOLDS_PATH}")
+    print("Dados sintéticos não passam por corte temporal. Não use estas métricas como evidência.")
 
 
 def train_synthetic():
@@ -85,50 +103,184 @@ def train_synthetic():
     save(model, df)
 
 
-# Cortes trimestrais; o último + 90 dias ainda cabe no dataset (termina em 09/12/2011).
-TRAIN_CUTOFFS = ["2010-06-01", "2010-09-01", "2010-12-01", "2011-03-01", "2011-06-01"]
-TEST_CUTOFF = "2011-09-01"
-HORIZON_DAYS = 90
+def _blank_report(source: str) -> dict:
+    return {
+        "source": source,
+        "saved": False,
+        "failures": [],
+        "train_cutoffs": [],
+        "test_cutoff": None,
+        "train_rows": 0,
+        "train_customers": 0,
+        "test_customers": 0,
+        "test_churn_rate": None,
+        "accuracy": None,
+        "baseline": None,
+        "auc": None,
+        "segment_sizes": None,
+        "segment_note": None,
+        "thresholds": None,
+        "final_fit_rows": None,
+    }
 
 
-def train_online_retail():
-    from app.ml.online_retail import build_training_set, load_orders
+def _iso(value) -> str:
+    return pd.Timestamp(value).date().isoformat()
 
-    orders = load_orders()
-    print(f"{len(orders)} pedidos de {orders['customer_id'].nunique()} clientes")
 
-    print("Montando snapshots por data de corte...")
-    train_df = build_training_set(orders, TRAIN_CUTOFFS, HORIZON_DAYS)
-    test_df = build_training_set(orders, [TEST_CUTOFF], HORIZON_DAYS)
+def _churn_probability(model: Pipeline, frame: pd.DataFrame) -> np.ndarray:
+    classes = list(model.named_steps["clf"].classes_)
+    if 1 not in classes:
+        return np.zeros(len(frame))
+    column = classes.index(1)
+    return model.predict_proba(frame[FEATURES])[:, column]
 
-    # Avaliação temporal: o teste é um corte posterior que o modelo nunca viu.
+
+def train_from_orders(orders: pd.DataFrame, source: str, artifact_dir: str = None) -> dict:
+    """Treina churn e K-Means na mesma base. Só grava se a medição do corte de teste passar."""
+    report = _blank_report(source)
+    artifact_dir = artifact_dir or ARTIFACT_DIR
+    orders = orders.copy()
+    orders["date"] = pd.to_datetime(orders["date"])
+
+    train_cutoffs, test_cutoff = choose_cutoffs(orders, HORIZON_DAYS)
+    if test_cutoff is None:
+        report["failures"] = [
+            "histórico curto demais para um corte de treino e um de teste com "
+            f"{HORIZON_DAYS} dias de futuro observável"
+        ]
+        return report
+
+    report["train_cutoffs"] = [_iso(cutoff) for cutoff in train_cutoffs]
+    report["test_cutoff"] = _iso(test_cutoff)
+
+    train_df = build_training_set(orders, train_cutoffs, HORIZON_DAYS)
+    test_df = build_training_set(orders, [test_cutoff], HORIZON_DAYS)
+    report["train_rows"] = int(len(train_df))
+    report["train_customers"] = int(train_df["customer_id"].nunique()) if len(train_df) else 0
+    report["test_customers"] = int(test_df["customer_id"].nunique()) if len(test_df) else 0
+
+    if train_df.empty or test_df.empty:
+        report["failures"] = ["algum corte ficou sem clientes com histórico anterior"]
+        return report
+
+    if train_df["churn"].nunique() < 2:
+        report["failures"] = ["o treino ficou com uma classe só — não há o que separar"]
+        report["test_churn_rate"] = float(test_df["churn"].mean())
+        return report
+
     model = build_model()
     model.fit(train_df[FEATURES], train_df["churn"])
+    report["final_fit_rows"] = int(len(train_df))
 
-    y_test = test_df["churn"]
-    proba = model.predict_proba(test_df[FEATURES])[:, 1]
-    accuracy = accuracy_score(y_test, proba >= 0.5)
-    baseline = max(y_test.mean(), 1 - y_test.mean())
+    proba = _churn_probability(model, test_df)
+    y_test = test_df["churn"].astype(int)
+    report["accuracy"] = float(accuracy_score(y_test, proba >= 0.5))
+    report["baseline"] = float(max(y_test.mean(), 1 - y_test.mean()))
+    report["test_churn_rate"] = float(y_test.mean())
+    if y_test.nunique() == 2:
+        report["auc"] = float(roc_auc_score(y_test, proba))
 
-    print(f"\nTeste no corte {TEST_CUTOFF} ({len(test_df)} clientes, churn real = {y_test.mean():.1%})")
-    print(f"  Acurácia:            {accuracy:.2%}")
-    print(f"  Baseline (chutar a classe mais comum): {baseline:.2%}")
-    print(f"  ROC AUC:             {roc_auc_score(y_test, proba):.3f}  (0.5 = aleatório, 1.0 = perfeito)")
+    latest_cutoff = pd.to_datetime(train_df["cutoff"]).max()
+    latest = train_df.loc[pd.to_datetime(train_df["cutoff"]) == latest_cutoff].copy()
+    report["thresholds"] = derive_thresholds(latest)
 
-    # Modelo final usa todos os cortes, incluindo o de teste.
-    full_df = pd.concat([train_df, test_df], ignore_index=True)
-    final_model = build_model()
-    final_model.fit(full_df[FEATURES], full_df["churn"])
+    pipeline = None
+    segment_map = None
+    if len(latest) < N_CLUSTERS:
+        report["segment_note"] = (
+            f"só {len(latest)} clientes no último corte de treino; "
+            f"o K-Means precisa de pelo menos {N_CLUSTERS}"
+        )
+    else:
+        pipeline, segment_map, report["segment_sizes"] = fit_segmenter(latest)
 
-    # Só o modelo de churn: o K-Means com esses dados gera segmentos muito
-    # desbalanceados (valores de atacado dominam os clusters). O segmentador
-    # continua vindo de `--synthetic` até isso ser tratado.
-    joblib.dump(final_model, MODEL_PATH)
-    print(f"Modelo de churn salvo em {MODEL_PATH}")
+    report["failures"] = acceptance_failures(report, report["segment_sizes"])
+    report["saved"] = not report["failures"]
+    if report["saved"]:
+        os.makedirs(artifact_dir, exist_ok=True)
+        joblib.dump(model, os.path.join(artifact_dir, "model.joblib"))
+        save_segmenter(pipeline, segment_map, artifact_dir)
+        payload = dict(report["thresholds"])
+        payload["source"] = source
+        payload["test_cutoff"] = report["test_cutoff"]
+        payload["test_auc"] = report["auc"]
+        payload["test_customers"] = report["test_customers"]
+        joblib.dump(payload, os.path.join(artifact_dir, "thresholds.joblib"))
+
+    return report
+
+
+def _pct(value) -> str:
+    if value is None:
+        return "—"
+    return f"{value:.1%}"
+
+
+def _plain(value, digits: int) -> str:
+    if value is None:
+        return "—"
+    return f"{value:.{digits}f}"
+
+
+def print_report(report: dict) -> None:
+    print(f"Base: {report['source']}")
+    print("A contagem de clientes não aprova o modelo. Ele só é gravado se o corte de teste")
+    print("ganhar do baseline e cada segmento tiver tamanho mínimo.")
+    train_cutoffs = ", ".join(report["train_cutoffs"]) or "—"
+    print(f"Cortes de treino: {train_cutoffs}")
+    print(f"Corte de teste (não entra no modelo): {report['test_cutoff'] or '—'}")
+    print(f"Clientes no treino: {report['train_customers']} ({report['train_rows']} linhas)")
+    print(f"Clientes no teste: {report['test_customers']}")
+    print(f"Churn no teste: {_pct(report['test_churn_rate'])}")
+    print(f"Acurácia: {_pct(report['accuracy'])}")
+    print(f"Baseline (chute da classe mais comum): {_pct(report['baseline'])}")
+    print(f"ROC AUC: {_plain(report['auc'], 3)}  (0.5 = aleatório, 1.0 = perfeito)")
+    print("O score não é probabilidade calibrada.")
+    if report["segment_sizes"]:
+        print(f"Segmentos no último corte de treino: {report['segment_sizes']}")
+    if report["thresholds"]:
+        limits = report["thresholds"]
+        print(
+            "Limiares desta base: "
+            f"alto a partir de {limits['value_high']:.2f}, "
+            f"médio a partir de {limits['value_medium']:.2f}, "
+            f"ticket baixo abaixo de {limits['ticket_low']:.2f}, "
+            f"tendência ±{limits['trend_delta']:.2f}"
+        )
+    if report["saved"]:
+        print("Artefato gravado. Reinicie a API para carregar.")
+    else:
+        print("Artefato não foi gravado.")
+        for failure in report["failures"]:
+            print(f"  - {failure}")
+
+
+def main(argv: list = None) -> int:
+    parser = argparse.ArgumentParser(description="Treina o motor numa base de pedidos.")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--orders", metavar="CSV", help="CSV com customer_id, date e value")
+    group.add_argument("--benchmark", action="store_true", help="Online Retail II, só como benchmark")
+    group.add_argument("--synthetic", action="store_true", help="Dados sintéticos, sem validação temporal")
+    args = parser.parse_args(argv)
+
+    if args.synthetic:
+        train_synthetic()
+        return 0
+
+    if args.benchmark:
+        from app.ml.online_retail import load_orders
+        orders = load_orders()
+        source = "online_retail_ii"
+    else:
+        orders = load_orders_csv(args.orders)
+        source = args.orders
+
+    print(f"{len(orders)} pedidos de {orders['customer_id'].nunique()} clientes")
+    report = train_from_orders(orders, source)
+    print_report(report)
+    return 0 if report["saved"] else 1
 
 
 if __name__ == "__main__":
-    if "--synthetic" in sys.argv:
-        train_synthetic()
-    else:
-        train_online_retail()
+    sys.exit(main())

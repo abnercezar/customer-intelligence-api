@@ -1,11 +1,10 @@
 """
-Dataset real Online Retail II (UCI): transações de uma loja online do Reino Unido,
+Dataset de benchmark Online Retail II (UCI): loja online do Reino Unido,
 dez/2009 a dez/2011. Valores em libras (GBP); boa parte dos clientes é atacadista.
 https://archive.ics.uci.edu/dataset/502/online+retail+ii
 
-Rótulo de churn por data de corte:
-  features → calculadas só com os pedidos ANTES do corte
-  churn=1  → cliente não comprou nos `horizon_days` dias DEPOIS do corte
+Não é o modelo do produto. Serve para comparar o pipeline. O treino de uma base
+real entra por CSV em `python -m app.ml.train --orders`.
 """
 import io
 import os
@@ -14,7 +13,9 @@ import zipfile
 
 import pandas as pd
 
-from app.ml.features import extract_features
+from app.ml.orders import build_training_set
+
+__all__ = ["build_training_set", "clean_transactions", "download", "load_orders"]
 
 DATASET_URL = "https://archive.ics.uci.edu/static/public/502/online+retail+ii.zip"
 RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "raw")
@@ -61,23 +62,3 @@ def load_orders() -> pd.DataFrame:
     orders = clean_transactions(pd.concat(sheets.values(), ignore_index=True))
     orders.to_csv(ORDERS_CACHE_PATH, index=False)
     return orders
-
-
-def build_training_set(orders: pd.DataFrame, cutoffs: list, horizon_days: int = 90) -> pd.DataFrame:
-    rows = []
-    for cutoff in pd.to_datetime(cutoffs):
-        history = orders[orders["date"] < cutoff]
-        future = orders[(orders["date"] >= cutoff) & (orders["date"] < cutoff + pd.Timedelta(days=horizon_days))]
-        returned = set(future["customer_id"])
-
-        for customer_id, customer_orders in history.groupby("customer_id"):
-            features = extract_features(
-                customer_orders[["date", "value"]].to_dict("records"),
-                reference_date=cutoff.to_pydatetime(),
-            )
-            features["customer_id"] = customer_id
-            features["cutoff"] = cutoff
-            features["churn"] = 0 if customer_id in returned else 1
-            rows.append(features)
-
-    return pd.DataFrame(rows)

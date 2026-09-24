@@ -30,10 +30,12 @@ Nunca criar scaler separado fora do Pipeline.
 
 ## Retreino
 
-Sempre retreinar ambos os modelos juntos:
+Uma base de pedidos treina os dois modelos e os limiares juntos. O último corte temporal só mede; não entra no modelo gravado. Sem ganho sobre o baseline, o artefato anterior permanece.
+
 ```bash
-python -m app.ml.train
-# Treina RandomForest (churn) + KMeans (segmentação) em sequência
+python -m app.ml.train --orders pedidos.csv
+# Online Retail II é benchmark, não o modelo do produto:
+python -m app.ml.train --benchmark
 ```
 
 ## Separação de responsabilidades
