@@ -88,6 +88,23 @@ Teste no navegador:
 
 ---
 
+## Produção
+
+O serviço no Railway sobe só a API. A chave é a variável `API_KEY` em **Variables** do serviço `web`, não o `teste123` local.
+
+- https://web-production-1a7e53.up.railway.app/health → `{"status":"healthy"}`, sem chave
+- https://web-production-1a7e53.up.railway.app/docs → painel. Em **Authorize**, cole a `API_KEY` do Railway
+- `POST` https://web-production-1a7e53.up.railway.app/analyze → um cliente. Cabeçalho `X-API-Key`
+- `POST` https://web-production-1a7e53.up.railway.app/batch → vários clientes. A mesma chave
+
+```powershell
+$headers = @{ "X-API-Key" = "a-chave-do-railway"; "Content-Type" = "application/json" }
+$body = '{"customer_id":"ana","orders":[{"date":"2026-03-10","value":300},{"date":"2026-04-15","value":350}]}'
+Invoke-RestMethod -Method Post -Uri "https://web-production-1a7e53.up.railway.app/analyze" -Headers $headers -Body $body
+```
+
+---
+
 ## 6. Subir o dashboard (opcional)
 
 Abra um **segundo** PowerShell (a API precisa continuar rodando no primeiro):
