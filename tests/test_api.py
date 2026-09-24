@@ -270,3 +270,21 @@ def test_low_risk_does_not_trigger_retention_for_at_risk_cluster():
 def test_segment_action_is_kept_when_risk_agrees():
     assert _action("champion", "low", frequency=8) == "maintain_engagement"
     assert _action("at_risk", "high", frequency=5) == "retention"
+
+
+def test_docs_explain_the_reading_and_which_routes_need_a_key():
+    schema = client.get("/openapi.json").json()
+    assert "não entra no cálculo" in schema["info"]["description"]
+    assert "Authorize" in schema["info"]["description"]
+    analyze = schema["paths"]["/analyze"]["post"]
+    assert analyze["summary"] == "Ler um cliente"
+    assert "Try it out" in analyze["description"]
+    assert "pode esperar" in analyze["description"]
+    assert "não cancela o lote" in schema["paths"]["/batch"]["post"]["description"]
+    assert schema["paths"]["/batch"]["post"]["summary"] == "Ler vários clientes"
+    assert schema["paths"]["/health"]["get"]["summary"] == "Está no ar?"
+    assert "security" not in schema["paths"]["/health"]["get"]
+    assert schema["paths"]["/analyze"]["post"]["security"]
+    example = schema["components"]["schemas"]["CustomerRequest"]["example"]
+    assert example["customer_id"] == "ana"
+    assert example["orders"][0]["date"] == "2026-03-10"

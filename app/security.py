@@ -2,10 +2,17 @@ import os
 import secrets
 from typing import Optional
 
-from fastapi import Header, HTTPException
+from fastapi import HTTPException, Security
+from fastapi.security import APIKeyHeader
+
+api_key_header = APIKeyHeader(
+    name="X-API-Key",
+    auto_error=False,
+    description="A mesma chave com que a API foi ligada. Está no ar? não pede.",
+)
 
 
-def require_api_key(x_api_key: Optional[str] = Header(default=None)):
+def require_api_key(x_api_key: Optional[str] = Security(api_key_header)):
     expected = os.getenv("API_KEY")
     if not expected:
         # Sem chave configurada a API fica fechada, nunca aberta.
