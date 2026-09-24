@@ -1,0 +1,47 @@
+---
+description: Regras para manter a integridade do pipeline de ML — consistência treino/inferência, não confundir dados sintéticos com reais, versionamento. Aplica a train.py, features.py e predictor.py.
+globs:
+  - "app/ml/train.py"
+  - "app/ml/features.py"
+  - "app/ml/segmenter.py"
+  - "app/models/predictor.py"
+alwaysApply: false
+---
+
+# Pipeline de ML — Regras
+
+## Consistência treino/inferência
+
+A lista `FEATURES` em `features.py` é a fonte única da verdade.
+Treino e inferência devem usar exatamente as mesmas features na mesma ordem.
+
+## Dados sintéticos
+
+O modelo atual foi treinado com dados sintéticos gerados por regras.
+
+- NÃO reportar métricas do modelo sintético como evidência de performance real
+- NÃO chamar `behavior_score` de "probabilidade de churn" sem validação
+- Usar termos: `behavior_score`, `risk_score`, `attention_score`
+
+## Scaler
+
+O `StandardScaler` está dentro do `Pipeline` do scikit-learn — correto.
+Nunca criar scaler separado fora do Pipeline.
+
+## Retreino
+
+Sempre retreinar ambos os modelos juntos:
+```bash
+python -m app.ml.train
+# Treina RandomForest (churn) + KMeans (segmentação) em sequência
+```
+
+## Separação de responsabilidades
+
+```
+features.py   → apenas feature engineering
+train.py      → apenas treino e persistência
+predictor.py  → apenas inferência e lógica de negócio
+```
+
+Não misturar treino com inferência no mesmo arquivo.

@@ -1,0 +1,59 @@
+---
+description: Regras para escrever testes — cobertura de edge cases, comportamento real, não apenas happy path. Aplica a tests/.
+globs:
+  - "tests/**/*.py"
+alwaysApply: false
+---
+
+# Testes — Regras
+
+## Rodar testes
+
+```bash
+python -m pytest tests/ -v
+```
+
+## O que testar além do happy path
+
+### Features isoladas
+- 1 evento (sem intervalo calculável)
+- Datas fora de ordem
+- Valores zero ou negativos
+- Trend com valores todos iguais
+
+### Comportamento do motor
+- Cliente inativo muito além do intervalo habitual → at_risk ou reactivation
+- Cliente com compras crescentes → purchase_trend: "growing"
+- Cliente novo (1 evento) → segment: "new", confidence: "low"
+- reasons nunca vazio
+
+### Autenticação
+- Sem chave → 403
+- Chave errada → 403
+- /health sem chave → 200
+
+### Batch
+- Item com erro não derruba o lote
+- Lote vazio → 400
+- Lote acima do limite → 400
+
+## Estrutura do teste
+
+```python
+def test_nome_descritivo_do_comportamento():
+    # arrange
+    payload = {...}
+    # act
+    response = client.post("/analyze", json=payload)
+    # assert
+    assert response.status_code == 200
+    data = response.json()
+    assert data["campo"] == valor_esperado
+```
+
+## Nunca testar implementação interna
+
+Testar comportamento observável, não detalhes de implementação.
+
+❌ `assert predictor._segment(...) == "champion"`
+✅ `assert response.json()["segment"] == "champion"`

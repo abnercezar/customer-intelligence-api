@@ -1,0 +1,49 @@
+---
+description: Regras para trabalhar no motor comportamental — features RFM, baseline individual, sinais, segmentação e explicabilidade. Aplica a features.py, segmenter.py e predictor.py.
+globs:
+  - "app/ml/features.py"
+  - "app/ml/segmenter.py"
+  - "app/models/predictor.py"
+alwaysApply: false
+---
+
+# Motor Comportamental — Regras
+
+## Regra fundamental
+
+Comparar o cliente com o próprio histórico, não apenas com thresholds globais.
+
+Calcular `personal_baseline` (intervalo esperado) quando houver 3+ eventos.
+
+## Features obrigatórias
+
+```python
+FEATURES = ["recency", "frequency", "monetary_avg", "monetary_total", "trend_slope", "avg_days_between"]
+```
+
+A ordem é fixa. Não reordenar sem retreinar o modelo.
+
+## Confiança da análise
+
+```python
+# Retornar junto com o resultado:
+confidence = "low"   # 1–2 eventos
+confidence = "medium" # 3–4 eventos
+confidence = "high"  # 5+ eventos
+```
+
+## Explicabilidade
+
+Cada razão deve ter: métrica, valor atual, valor de referência.
+
+```python
+{"metric": "days_since_last", "value": 74, "baseline": 30}
+```
+
+Nunca retornar apenas `"comportamento fora do padrão"` sem especificar qual métrica e qual desvio.
+
+## Ao modificar features.py
+
+1. Manter `FEATURES` exportado e na mesma ordem
+2. Tratar o caso de 1 único evento (sem `avg_days_between` calculável)
+3. Qualquer nova feature → retreinar modelo obrigatoriamente

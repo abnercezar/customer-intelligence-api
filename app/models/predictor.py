@@ -2,6 +2,7 @@ import os
 import joblib
 import pandas as pd
 from app.ml.features import FEATURES, extract_features
+from app.ml.segmenter import predict_segment
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "ml", "model.joblib")
 
@@ -14,17 +15,6 @@ def get_model():
         _model = joblib.load(MODEL_PATH)
     return _model
 
-
-def _segment(recency: int, frequency: int, monetary_avg: float, churn_risk: float) -> str:
-    if churn_risk < 0.25 and frequency >= 6 and monetary_avg >= 300:
-        return "champion"
-    if churn_risk < 0.4 and frequency >= 3:
-        return "loyal"
-    if churn_risk >= 0.65:
-        return "at_risk"
-    if frequency <= 1:
-        return "new"
-    return "potential"
 
 
 def _trend(slope: float) -> str:
@@ -46,8 +36,8 @@ def _value(total: float) -> str:
 def _action(segment: str) -> str:
     return {
         "champion": "maintain_engagement",
-        "loyal": "upsell",
-        "at_risk": "reactivation",
+        "loyal": "maintain_relationship",
+        "at_risk": "retention",
         "new": "onboarding",
         "potential": "nurture",
     }.get(segment, "monitor")
@@ -55,18 +45,38 @@ def _action(segment: str) -> str:
 
 def _reasons(features: dict, trend: str) -> list:
     reasons = []
-    if features["recency"] > 60:
-        reasons.append(f"tempo desde última compra acima do padrão ({features['recency']} dias)")
+    expected = features.get("expected_interval")
+    recency = features["recency"]
+
+    if expected is not None:
+        # Compara com o próprio histórico do cliente.
+        deviation = recency - expected
+        if deviation > expected * 0.5:
+            ratio = recency / expected
+            reasons.append(
+                f"{recency} dias desde última atividade "
+                f"(habitual: {int(expected)} dias — {ratio:.1f}x acima do esperado)"
+            )
+    else:
+        # Sem baseline individual: usa threshold global como fallback.
+        if recency > 60:
+            reasons.append(
+                f"{recency} dias desde última atividade "
+                f"(histórico insuficiente para calcular intervalo habitual)"
+            )
+
     if features["frequency"] < 3:
-        reasons.append("baixa frequência de compras")
+        reasons.append("poucos eventos no histórico — padrão ainda não estabelecido")
+
     if trend == "declining":
-        reasons.append("valor das compras em queda")
+        reasons.append("valor das transações em queda ao longo do tempo")
+
     if features["monetary_avg"] < 100:
-        reasons.append("ticket médio abaixo da média")
-    if features["avg_days_between"] > 45:
-        reasons.append("intervalo médio entre compras elevado")
+        reasons.append(f"ticket médio baixo (R${features['monetary_avg']:.0f})")
+
     if not reasons:
         reasons.append("comportamento dentro do padrão esperado")
+
     return reasons
 
 
@@ -76,7 +86,7 @@ def predict(orders: list, customer_id: str) -> dict:
     X = pd.DataFrame([features], columns=FEATURES)
 
     churn_risk = round(float(get_model().predict_proba(X)[0][1]), 2)
-    segment = _segment(features["recency"], features["frequency"], features["monetary_avg"], churn_risk)
+    segment = predict_segment(features)
     trend = _trend(features["trend_slope"])
     value = _value(features["monetary_total"])
     action = _action(segment)
@@ -90,4 +100,5 @@ def predict(orders: list, customer_id: str) -> dict:
         "customer_value": value,
         "recommended_action": action,
         "reasons": reasons,
+        "confidence": features["confidence"],
     }

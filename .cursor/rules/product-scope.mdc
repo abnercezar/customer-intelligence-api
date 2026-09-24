@@ -1,0 +1,48 @@
+---
+description: Regras de escopo do produto. Aplica a todos os arquivos. Previne scope creep e garante que o produto permaneça uma camada de inteligência, não um CRM.
+globs:
+  - "**/*.py"
+alwaysApply: true
+---
+
+# Escopo do Produto — Regras Sempre Ativas
+
+## O que este produto é
+
+Uma **camada de inteligência comportamental** stateless.
+
+Recebe: histórico de eventos de um cliente.
+Devolve: sinal comportamental + razões + ação recomendada.
+
+## O que este produto NÃO é
+
+- Não é CRM
+- Não é sistema de gestão de vendas
+- Não é ferramenta de marketing automation
+- Não é banco de dados de clientes
+- Não tem estado persistente de clientes
+
+## Critério antes de adicionar qualquer funcionalidade
+
+Responde SIM para pelo menos uma pergunta abaixo?
+
+1. Melhora a identificação de comportamento do cliente?
+2. Melhora a explicabilidade do resultado?
+3. Melhora a utilidade da recomendação?
+4. Remove uma limitação que impede uso real?
+
+Se NÃO para todas → questionar antes de implementar.
+
+## Regras gerais de desenvolvimento
+
+1. Ler o código antes de modificar
+2. Não recriar o que já existe
+3. Não adicionar dependências sem justificar
+4. Todo código novo tem teste
+5. Não chamar heurística de IA
+6. Não chamar score de probabilidade calibrada sem validação
+7. Preferir a solução mais simples
+
+## Critério de sucesso
+
+> Dado o histórico de um cliente, o sistema identifica uma mudança relevante no comportamento e explica claramente por que ela merece atenção.

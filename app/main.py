@@ -33,8 +33,8 @@ def analyze(request: CustomerRequest):
 
     try:
         result = predict(orders, request.customer_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="Erro interno ao processar análise.")
 
     return result
 

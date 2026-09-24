@@ -1,0 +1,43 @@
+---
+description: Regras para manter contratos de API estáveis. Aplica a main.py e schemas.py.
+globs:
+  - "app/main.py"
+  - "app/models/schemas.py"
+  - "app/security.py"
+alwaysApply: false
+---
+
+# Contratos de API — Regras
+
+## Schema de saída atual (não quebrar)
+
+```json
+{
+  "customer_id": "string",
+  "churn_risk": float,
+  "segment": "champion|loyal|potential|at_risk|new",
+  "purchase_trend": "growing|stable|declining",
+  "customer_value": "high|medium|low",
+  "recommended_action": "string",
+  "reasons": ["string"]
+}
+```
+
+## Regras de evolução
+
+- Nunca remover campos existentes
+- Novos campos devem ser opcionais (`Optional`)
+- Nunca mudar tipo de campo existente
+- Nunca mover lógica de negócio para `main.py` — pertence a `predictor.py`
+
+## Autenticação
+
+- Todos os endpoints exceto `/health` requerem `X-API-Key`
+- `API_KEY` vem de variável de ambiente — nunca hardcoded
+- Erro sem chave → 403, não 401
+
+## Batch
+
+- Limite: `MAX_BATCH_SIZE = 500`
+- Erro em 1 item não cancela o lote
+- Retornar `error` no item com problema, continuar os demais
