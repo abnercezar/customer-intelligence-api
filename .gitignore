@@ -6,3 +6,5 @@ venv/
 .env
 *.log
 data/raw/
+commands.md
+algoritmos-e-api.md
