@@ -70,9 +70,31 @@ def test_wrong_api_key_returns_403():
 
 
 def test_unconfigured_api_key_blocks_requests(monkeypatch):
-    monkeypatch.delenv("API_KEY")
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("API_KEYS", raising=False)
     assert anonymous.post("/analyze", json=SAMPLE_PAYLOAD).status_code == 500
     assert client.post("/analyze", json=SAMPLE_PAYLOAD).status_code == 500
+
+
+def test_second_company_key_is_accepted(monkeypatch):
+    monkeypatch.setenv("API_KEYS", '{"loja-ana":"chave-loja"}')
+    response = anonymous.post(
+        "/analyze",
+        json=SAMPLE_PAYLOAD,
+        headers={"X-API-Key": "chave-loja"},
+    )
+    assert response.status_code == 200
+    assert client.post("/analyze", json=SAMPLE_PAYLOAD).status_code == 200
+
+
+def test_unknown_key_stays_forbidden_when_company_keys_exist(monkeypatch):
+    monkeypatch.setenv("API_KEYS", '{"loja-ana":"chave-loja"}')
+    response = anonymous.post(
+        "/analyze",
+        json=SAMPLE_PAYLOAD,
+        headers={"X-API-Key": "outra"},
+    )
+    assert response.status_code == 403
 
 
 def test_batch_returns_one_result_per_customer():
@@ -272,10 +294,92 @@ def test_segment_action_is_kept_when_risk_agrees():
     assert _action("at_risk", "high", frequency=5) == "retention"
 
 
+def test_security_headers_hide_the_reading_from_caches():
+    response = anonymous.get("/health")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert "default-src 'none'" in response.headers["content-security-policy"]
+
+
+def test_body_over_limit_returns_413(monkeypatch):
+    monkeypatch.setattr("app.protection.MAX_BODY_BYTES", 20)
+    response = client.post("/analyze", json=SAMPLE_PAYLOAD)
+    assert response.status_code == 413
+    assert "grande demais" in response.json()["detail"]
+
+
+def test_customer_id_rejects_blank_and_control_characters():
+    blank = client.post("/analyze", json={"customer_id": "   ", "orders": SAMPLE_PAYLOAD["orders"]})
+    assert blank.status_code == 422
+    broken = client.post(
+        "/analyze",
+        json={"customer_id": "ana\nlinha", "orders": SAMPLE_PAYLOAD["orders"]},
+    )
+    assert broken.status_code == 422
+
+
+def test_non_finite_value_returns_422():
+    payload = {"customer_id": "infinito", "orders": [{"date": "2026-03-01", "value": 1e309}]}
+    response = client.post("/analyze", json=payload)
+    assert response.status_code == 422
+    assert "Valor inválido" in _error_text(response)
+
+
+def test_internal_error_does_not_leak_details(monkeypatch):
+    def boom(orders, customer_id):
+        raise RuntimeError("caminho /segredo e chave interna")
+
+    monkeypatch.setattr("app.main.predict", boom)
+    one = client.post("/analyze", json=SAMPLE_PAYLOAD)
+    assert one.status_code == 500
+    assert "segredo" not in one.text
+    batch = client.post("/batch", json=[SAMPLE_PAYLOAD])
+    assert batch.status_code == 200
+    assert batch.json()[0]["error"] == "Erro interno ao processar análise."
+    assert "segredo" not in batch.text
+
+
+def test_rate_limit_per_key_returns_429(monkeypatch):
+    from app.security import _hits
+
+    monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "2")
+    _hits.clear()
+    assert client.post("/analyze", json=SAMPLE_PAYLOAD).status_code == 200
+    assert client.post("/analyze", json=SAMPLE_PAYLOAD).status_code == 200
+    blocked = client.post("/analyze", json=SAMPLE_PAYLOAD)
+    assert blocked.status_code == 429
+    assert blocked.headers["retry-after"] == "60"
+    _hits.clear()
+
+
+def test_invalid_key_flood_does_not_block_the_right_key(monkeypatch):
+    from app.security import _failures, _hits
+
+    monkeypatch.setenv("AUTH_FAILURE_LIMIT_PER_MINUTE", "2")
+    _failures.clear()
+    _hits.clear()
+    assert anonymous.post("/analyze", json=SAMPLE_PAYLOAD, headers={"X-API-Key": "errada"}).status_code == 403
+    assert anonymous.post("/analyze", json=SAMPLE_PAYLOAD, headers={"X-API-Key": "outra"}).status_code == 403
+    flooded = anonymous.post("/analyze", json=SAMPLE_PAYLOAD, headers={"X-API-Key": "mais-uma"})
+    assert flooded.status_code == 429
+    assert client.post("/analyze", json=SAMPLE_PAYLOAD).status_code == 200
+    _failures.clear()
+    _hits.clear()
+
+
 def test_docs_explain_the_reading_and_which_routes_need_a_key():
     schema = client.get("/openapi.json").json()
-    assert "não entra no cálculo" in schema["info"]["description"]
-    assert "Authorize" in schema["info"]["description"]
+    description = schema["info"]["description"]
+    assert "Authorize" in description
+    assert "`GET /health`" in description
+    assert "não pedem chave" in description
+    assert "X-API-Key" in description
+    assert "POST /analyze" in description
+    assert "K-Means" not in description
+    assert "floresta" not in description.lower()
+    assert "empresa" in schema["components"]["securitySchemes"]["APIKeyHeader"]["description"]
     analyze = schema["paths"]["/analyze"]["post"]
     assert analyze["summary"] == "Ler um cliente"
     assert "Try it out" in analyze["description"]
@@ -283,6 +387,8 @@ def test_docs_explain_the_reading_and_which_routes_need_a_key():
     assert "não cancela o lote" in schema["paths"]["/batch"]["post"]["description"]
     assert schema["paths"]["/batch"]["post"]["summary"] == "Ler vários clientes"
     assert schema["paths"]["/health"]["get"]["summary"] == "Está no ar?"
+    assert schema["components"]["schemas"]["HealthStatus"]["example"] == {"status": "healthy"}
+    assert schema["components"]["schemas"]["ServiceStatus"]["example"] == {"status": "ok", "version": "1.0.0"}
     assert "security" not in schema["paths"]["/health"]["get"]
     assert schema["paths"]["/analyze"]["post"]["security"]
     example = schema["components"]["schemas"]["CustomerRequest"]["example"]

@@ -23,7 +23,7 @@ Dado o histórico, a leitura junta quatro coisas:
 
 ## Endpoints
 
-Autenticação: header `X-API-Key`. A chave vem da variável de ambiente `API_KEY`. Sem chave configurada no servidor, a leitura responde 500. Chave ausente ou diferente responde 403. A comparação da chave é em tempo constante.
+Autenticação: header `X-API-Key`. Cada empresa tem a própria chave. `API_KEY` continua valendo como cliente `default`. `API_KEYS` é um JSON no ambiente, do nome da empresa para a chave. Sem nenhuma chave configurada no servidor, a leitura responde 500. Chave ausente ou diferente responde 403. Cada chave é comparada em tempo constante. A chave certa tem um teto de leituras por minuto (120, ou `RATE_LIMIT_PER_MINUTE`); acima disso a resposta é 429. Rajada de chaves erradas também responde 429 (`AUTH_FAILURE_LIMIT_PER_MINUTE`, padrão 60). A chave certa continua passando durante essa rajada.
 
 | Método | Rota | Chave | Função |
 | --- | --- | --- | --- |
@@ -81,6 +81,11 @@ Validação do pedido (resposta 422):
 - `date` precisa ser `YYYY-MM-DD` (ISO). Data mais de 1 dia à frente de hoje é recusada. O dia de folga cobre diferença de fuso entre a loja e o servidor.
 - `value` menor que zero é recusado. Devolução e estorno não entram como compra.
 - Mais de 5.000 pedidos por cliente é recusado.
+- `customer_id` vazio, só com espaço, maior que 128 caracteres, ou com quebra de linha e outros caracteres de controle, é recusado.
+- `value` que não é um número finito, ou maior que 1 trilhão, é recusado.
+- Corpo maior que 10 MB responde 413, antes do cálculo.
+
+A resposta não é guardada em cache (`Cache-Control: no-store`). Falha interna, num cliente ou no lote, volta uma frase genérica, sem caminho, chave ou detalhe do servidor.
 
 Valor zero passa na API. No treino por CSV, valor zero, ausente ou negativo é rejeitado.
 
